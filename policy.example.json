@@ -1,0 +1,25 @@
+{
+  "user": {
+    "name": "your-name",
+    "persona": "Describe how you want the agent to reason by default, e.g. 'Prefer the simplest solution that works; think straight, no over-engineering.'",
+    "background": "Optional longer notes about your working style, project context, or recurring preferences."
+  },
+  "threshold": 0.7,
+  "authorized_scopes": [
+    "persona_assignment",
+    "content_style",
+    "local_file_organize",
+    "research_routing",
+    "tool_selection"
+  ],
+  "risky_scopes": [
+    "external_send",
+    "delete",
+    "paid",
+    "publish"
+  ],
+  "always_confirm": [],
+  "confidence": {},
+  "preferences": {},
+  "gap_log": []
+}

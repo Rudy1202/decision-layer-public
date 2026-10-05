@@ -1,0 +1,8 @@
+# Local state — never commit your real policy or audit log.
+policy.json
+decision_log.txt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
