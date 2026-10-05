@@ -1,5 +1,7 @@
 # decision-layer
 
+> 📖 中文文档：[README.zh.md](README.zh.md)
+
 A **local, learnable decision layer** for AI coding agents (WorkBuddy / opencode / any
 agent that can run a Python script). It lets an agent make *reusable* preference
 decisions without pestering you every time — and without a sprawling agent framework.
