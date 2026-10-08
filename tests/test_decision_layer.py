@@ -15,7 +15,7 @@ import unittest
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
-SCRIPTS = ["common.py", "decide.py", "learn.py", "decide_unattended.py", "review.py", "correct.py"]
+SCRIPTS = ["common.py", "decide.py", "learn.py", "decide_unattended.py", "review.py", "correct.py", "onboard.py"]
 
 
 def run(script, args, cwd, env=None):
@@ -178,6 +178,31 @@ class DecisionLayerTest(unittest.TestCase):
         # 0.9 * 0.7 = 0.63 -> below 0.7 -> CONFIRM again (freshness works)
         self.assertLess(d["confidence"], 0.7)
         self.assertEqual(d["mode"], "CONFIRM")
+
+    def test_onboard_non_interactive_persists_persona(self):
+        # default policy -> onboard with agent-supplied values
+        j = json.loads(run("onboard.py", [
+            "--non-interactive", "--name", "Wongr",
+            "--persona", "Prefer the simplest solution; think straight, no over-engineering.",
+            "--background", "Fast first, refine later.",
+        ], self.tmp))
+        self.assertTrue(j["onboarded"])
+
+        pol = os.path.join(self.tmp, "policy.json")
+        with open(pol, encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertEqual(data["user"]["name"], "Wongr")
+        self.assertIn("simplest", data["user"]["persona"])
+        self.assertEqual(data["user"]["background"], "Fast first, refine later.")
+
+        # a second onboard (now non-default) should NOT clobber in interactive mode
+        out2 = run("onboard.py", [], self.tmp)
+        self.assertIn("skipped", out2)
+
+        # --check exits 0 once onboarded
+        rc = subprocess.run([PY, "onboard.py", "--check"], cwd=self.tmp,
+                             capture_output=True, text=True)
+        self.assertEqual(rc.returncode, 0)
 
 
 if __name__ == "__main__":

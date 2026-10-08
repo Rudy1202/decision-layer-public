@@ -84,7 +84,7 @@ cd decision-layer
 - **Python 3.8+**（只用标准库：`argparse`、`json`、`os`、`sys`、`datetime`、`subprocess`）。
 - **无任何第三方包。** 没有 `pip install` 步骤。`requirements.txt` 说明了这一点，里面刻意不列任何需安装的包。
 
-> 首次运行会基于中性默认值自动生成 `policy.json`。编辑 `policy.json → user.persona` / `user.background` / `remediation_style` 来描述你的工作习惯，并把安全类加进 `auto_scopes` 以立即获得自主权。
+> 首次运行会基于中性默认值自动生成 `policy.json`。跑一次 `python onboard.py` 记录你的名字与 persona（或由智能体代你录入），再可选地把安全类加进 `auto_scopes` 即可立即获得自主权。你也可以直接手改 `policy.json → user.persona` / `user.background` / `remediation_style`。
 
 ## 快速开始
 
@@ -100,6 +100,25 @@ python learn.py --class news_angle --outcome confirm --chosen straight --rationa
 python decide.py --class news_angle --scope content_style --risk low \
   --candidates '[{"id":"straight","label":"直述","score":0.8}]'
 ```
+
+### 首启引导（记录你的 persona）
+
+技能是 **persona 驱动** 的，所以在第一次真正决策前先记录你的风格。两种方式：
+
+```bash
+# 交互式（在终端）：
+python onboard.py
+#   Your name [your-name]: Wongr
+#   How should the agent reason by default?: 偏好最简单可行的方案；直截了当，不过度设计。
+#   Optional background / working-style notes: 先快后精。
+
+# 或智能体代录（智能体问完后替你跑）：
+python onboard.py --non-interactive --name "Wongr" \
+  --persona "Prefer the simplest solution; think straight, no over-engineering." \
+  --background "Fast first, refine later."
+```
+
+录入后 `decide.py` / `correct.py` 会自动读取你的 persona，且**不会再被追问**。`onboard.py --check` 在已录入时退出码为 `0`（智能体可据此判断状态）。persona 存在 `policy.json` 里，**永不注入 LLM 上下文**——智能体只需裁决结果加一个 persona 标签，省 token。
 
 ### 预授权安全类（立即变快）
 

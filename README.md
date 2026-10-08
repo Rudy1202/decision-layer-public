@@ -111,9 +111,10 @@ cd decision-layer
 - **No third-party packages.** There is no `pip install` step. A `requirements.txt`
   documents this; it intentionally lists nothing to install.
 
-> On first run `policy.json` is auto-created from a neutral default. Edit
-> `policy.json → user.persona` / `user.background` / `remediation_style` to describe
-> how you like to work, and add safe classes to `auto_scopes` for instant autonomy.
+> On first run `policy.json` is auto-created from a neutral default. Run
+> `python onboard.py` once to capture your name + persona (or let your agent do it for
+> you), then optionally add safe classes to `auto_scopes` for instant autonomy. You can
+> also hand-edit `policy.json → user.persona` / `user.background` / `remediation_style`.
 
 ## Quick start
 
@@ -129,6 +130,29 @@ python learn.py --class news_angle --outcome confirm --chosen straight --rationa
 python decide.py --class news_angle --scope content_style --risk low \
   --candidates '[{"id":"straight","label":"Straight news","score":0.8}]'
 ```
+
+### First-run onboarding (capture your persona)
+
+The skill is *persona-driven*, so capture your style once before the first real
+decision. Two ways:
+
+```bash
+# Interactive (at a terminal):
+python onboard.py
+#   Your name [your-name]: Wongr
+#   How should the agent reason by default?: Prefer the simplest solution; think straight.
+#   Optional background / working-style notes: Fast first, refine later.
+
+# Or, agent-supplied (what your agent runs for you after asking):
+python onboard.py --non-interactive --name "Wongr" \
+  --persona "Prefer the simplest solution; think straight, no over-engineering." \
+  --background "Fast first, refine later."
+```
+
+After onboarding, `decide.py` / `correct.py` read your persona automatically and are
+never asked again. `onboard.py --check` exits `0` once onboarded (handy for agents to
+detect state). The persona lives in `policy.json` and is **never injected into the LLM
+context** — the agent only needs the verdict plus a persona tag, saving tokens.
 
 ### Pre-authorize safe classes (go fast immediately)
 

@@ -62,6 +62,26 @@ hand those straight to the LLM.
    their confidence multiplied by `0.7` (floor `INIT_CONF`), so stale preferences
    fall back to review instead of going stale-autonomous. Set `decay_days: 0` to disable.
 
+## First-run onboarding (persona capture)
+This skill is *persona-driven*, so before the first real decision the agent should
+make sure `policy.json` has the user's persona. Detection + capture:
+
+1. Run `python onboard.py --check`. If it exits `0`, the user is already onboarded — skip.
+2. If it exits `1` (policy is still the shipped placeholder), capture the persona:
+   - **Preferred:** ask the user in natural language for their name and a one-line
+     description of how they want the agent to reason by default (and optionally
+     their working-style background), then persist it:
+     ```
+     python onboard.py --non-interactive --name "<name>" --persona "<one line>" --background "<opt>"
+     ```
+   - **Or** let the user run `python onboard.py` interactively at a terminal.
+3. After onboarding, `decide.py` / `correct.py` read the persona automatically.
+   The persona lives in `policy.json` and is **never injected into the LLM context**
+   — the agent only needs the verdict + a persona tag, saving tokens.
+
+Note: onboarding is a one-time setup, not a per-decision prompt. Once captured, it
+is never asked again (and `onboard.py` refuses to clobber an existing persona).
+
 ## Workflow
 1. Identify the decision: `class`, `scope`, `risk` (low/med/high),
    `candidates` (JSON `[{id,label,score}]`, scored by you during planning).
