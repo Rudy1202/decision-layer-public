@@ -15,7 +15,7 @@ import unittest
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
-SCRIPTS = ["common.py", "decide.py", "learn.py", "decide_unattended.py", "review.py"]
+SCRIPTS = ["common.py", "decide.py", "learn.py", "decide_unattended.py", "review.py", "correct.py"]
 
 
 def run(script, args, cwd, env=None):
@@ -23,7 +23,7 @@ def run(script, args, cwd, env=None):
         [PY, script] + args, cwd=cwd, capture_output=True, text=True, env=env
     )
     if out.returncode != 0:
-        raise AssertionError(f"{script} failed:\n{out.stderr}")
+        raise AssertionError(f"{script} failed:\nSTDOUT:{out.stdout}\nSTDERR:{out.stderr}")
     return out.stdout
 
 
@@ -44,38 +44,45 @@ class DecisionLayerTest(unittest.TestCase):
         ], self.tmp)
         return json.loads(out)
 
-    def _learn(self, cls, outcome, chosen="", scope=""):
+    def _learn(self, cls, outcome, chosen="", scope="", rationale=""):
         args = ["--class", cls, "--outcome", outcome]
         if chosen:
             args += ["--chosen", chosen]
         if scope:
             args += ["--scope", scope]
+        if rationale:
+            args += ["--rationale", rationale]
         return json.loads(run("learn.py", args, self.tmp))
 
+    def _seed_policy(self, **overrides):
+        pol = os.path.join(self.tmp, "policy.json")
+        run("decide.py", ["--class", "_seed", "--candidates", "[]"], self.tmp)  # ensures policy.json exists
+        with open(pol, encoding="utf-8") as f:
+            data = json.load(f)
+        data.update(overrides)
+        with open(pol, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return data
+
     def test_gap_to_auto(self):
-        # 1) unknown class -> gap + CONFIRM
         d = self._decide("news_angle", '[{"id":"straight","label":"S","score":0.8}]')
         self.assertTrue(d["is_gap"])
         self.assertEqual(d["mode"], "CONFIRM")
         self.assertIsNone(d["learned_choice"])
 
-        # 2) confirm -> conf 0.5, learned_choice recorded
         L = self._learn("news_angle", "confirm", chosen="straight")
         self.assertEqual(L["confidence"], 0.5)
         self.assertEqual(L["was_gap"], True)
 
-        # 3) decide again -> CONFIRM (still < 0.7) but now known, learned_choice shown
         d = self._decide("news_angle", '[{"id":"straight","label":"S","score":0.8}]')
         self.assertFalse(d["is_gap"])
         self.assertEqual(d["mode"], "CONFIRM")
         self.assertEqual(d["learned_choice"], "straight")
 
-        # 4) confirm again -> conf 0.7 -> AUTO
         L = self._learn("news_angle", "confirm", chosen="straight")
         self.assertEqual(L["confidence"], 0.7)
         self.assertEqual(L["mode"], "AUTO")
 
-        # 5) decide -> AUTO
         d = self._decide("news_angle", '[{"id":"straight","label":"S","score":0.8}]')
         self.assertEqual(d["mode"], "AUTO")
 
@@ -86,29 +93,44 @@ class DecisionLayerTest(unittest.TestCase):
         self.assertEqual(L["learned_choice"], "b")
 
     def test_always_confirm_overrides_high_confidence(self):
-        # inject high confidence + hard rule by editing the auto-created policy
-        pol = os.path.join(self.tmp, "policy.json")
-        run("decide.py", ["--class", "_seed", "--candidates", "[]"], self.tmp)  # ensures policy.json exists
-        with open(pol, encoding="utf-8") as f:
-            data = json.load(f)
-        data["always_confirm"] = ["forceme"]
-        data["confidence"]["forceme"] = 0.95
-        with open(pol, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-
+        self._seed_policy(always_confirm=["forceme"], confidence={"forceme": 0.95})
         d = self._decide("forceme", '[{"id":"a","label":"A","score":0.9}]')
         self.assertEqual(d["mode"], "CONFIRM")
         self.assertTrue(d["risky"])
 
-    def test_risky_scope_forces_confirm(self):
-        d = self._decide("mail", '[{"id":"send","label":"Send","score":0.9}]', risk="low")
-        # external_send is a risky scope even at init conf 0.3 -> CONFIRM anyway,
-        # but verify risky flag triggers regardless of confidence
-        d2 = self._decide("mail", '[{"id":"send","label":"Send","score":0.9}]', risk="high")
-        self.assertTrue(d2["risky"])
-        self.assertEqual(d2["mode"], "CONFIRM")
+    def test_auto_scope_goes_auto_immediately(self):
+        # pre-authorized SAFE class -> AUTO even at init confidence 0.3
+        self._seed_policy(auto_scopes=["fast_cls"])
+        d = self._decide("fast_cls", '[{"id":"go","label":"Go","score":0.9}]')
+        self.assertEqual(d["mode"], "AUTO")
+        self.assertTrue(d["auto_scope"])
 
-    def test_unattended_writes_relative_log(self):
+        # but risky scope can never be auto_scopes
+        self._seed_policy(auto_scopes=["fast_cls"], risky_scopes=["content_style"])
+        d2 = self._decide("fast_cls", '[{"id":"go","label":"Go","score":0.9}]', risk="low")
+        self.assertEqual(d2["mode"], "CONFIRM")  # content_style now risky -> gated
+
+    def test_risky_scope_forces_confirm(self):
+        d = self._decide("mail", '[{"id":"send","label":"Send","score":0.9}]', risk="high")
+        self.assertTrue(d["risky"])
+        self.assertEqual(d["mode"], "CONFIRM")
+
+    def test_correct_py_persona_driven_plan(self):
+        out = run("correct.py", [
+            "--error", "ImportError: cannot import name 'X'",
+            "--class", "fix_import",
+        ], self.tmp)
+        self.assertIn("backup", out)
+        self.assertIn("plan", out)
+        self.assertIn("verify", out)
+        j = json.loads(run("correct.py", [
+            "--error", "boom", "--json",
+        ], self.tmp))
+        self.assertEqual(j["style"]["backup_before_change"], True)
+        self.assertIn("steps", j)
+        self.assertTrue(any(s["action"] == "backup" for s in j["steps"]))
+
+    def test_unattended_writes_jsonl_log(self):
         out = run("decide_unattended.py", [
             "--class", "yt_sel", "--scope", "content_style", "--risk", "low",
             "--candidates", '[{"id":"recent_top","label":"Recent top","score":0.7}]',
@@ -118,21 +140,44 @@ class DecisionLayerTest(unittest.TestCase):
         self.assertEqual(j["chosen_id"], "recent_top")
         self.assertTrue(os.path.exists(self.log))
         with open(self.log, encoding="utf-8") as f:
-            line = f.read().strip()
-        self.assertIn("class=yt_sel", line)
-        self.assertIn("gap=Y", line)  # first time -> gap
+            first = json.loads(f.readline().strip())
+        self.assertEqual(first["class"], "yt_sel")
+        self.assertEqual(first["gap"], "Y")  # first time -> gap
 
-        # review should list it as pending
         rev = run("review.py", ["--log", self.log], self.tmp)
         self.assertIn("yt_sel", rev)
 
-        # apply confirm -> next decide would be AUTO (conf 0.5, still < 0.7 -> still pending once)
+        # JSON output of review
+        revj = json.loads(run("review.py", ["--log", self.log, "--json"], self.tmp))
+        self.assertEqual(revj["pending"][0]["class"], "yt_sel")
+
         run("review.py", ["--apply", "--class", "yt_sel", "--outcome", "confirm",
                           "--chosen", "recent_top", "--log", self.log], self.tmp)
-        # after one confirm conf=0.5, still CONFIRM; verify learned
         d = self._decide("yt_sel", '[{"id":"recent_top","label":"Recent top","score":0.7}]')
         self.assertEqual(d["mode"], "CONFIRM")
         self.assertEqual(d["learned_choice"], "recent_top")
+
+    def test_legacy_text_log_lines_skipped(self):
+        # old pipe-delimited lines must not crash the JSONL parser
+        with open(self.log, "w", encoding="utf-8") as f:
+            f.write("2026-01-01 00:00 | class=old | mode=CONFIRM | conf=0.3 | chosen=x | gap=Y | pending_review\n")
+        with open(self.log, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"ts": "2026-02-01 00:00:00", "class": "newc",
+                                "mode": "CONFIRM", "conf": 0.3, "chosen": "y",
+                                "is_gap": True, "auto_scope": False, "gap": "Y"}) + "\n")
+        revj = json.loads(run("review.py", ["--log", self.log, "--json"], self.tmp))
+        classes = [r["class"] for r in revj["pending"]]
+        self.assertIn("newc", classes)
+        self.assertNotIn("old", classes)  # legacy text line skipped
+
+    def test_decay_lowers_stale_confidence(self):
+        from datetime import datetime, timedelta
+        old = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
+        self._seed_policy(confidence={"stale": 0.9}, last_seen={"stale": old}, decay_days=30)
+        d = self._decide("stale", '[{"id":"a","label":"A","score":0.9}]')
+        # 0.9 * 0.7 = 0.63 -> below 0.7 -> CONFIRM again (freshness works)
+        self.assertLess(d["confidence"], 0.7)
+        self.assertEqual(d["mode"], "CONFIRM")
 
 
 if __name__ == "__main__":

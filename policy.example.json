@@ -10,7 +10,10 @@
     "content_style",
     "local_file_organize",
     "research_routing",
-    "tool_selection"
+    "tool_selection",
+    "code_review",
+    "refactor",
+    "test_strategy"
   ],
   "risky_scopes": [
     "external_send",
@@ -19,7 +22,17 @@
     "publish"
   ],
   "always_confirm": [],
+  "auto_scopes": [],
   "confidence": {},
+  "last_seen": {},
   "preferences": {},
-  "gap_log": []
+  "gap_log": [],
+  "remediation_style": {
+    "phases": ["quick_fix", "refine"],
+    "prefer_direct": true,
+    "plan_before_action": true,
+    "backup_before_change": true,
+    "notes": "Optional: how you like fixes delivered. Used by correct.py to shape remediation plans."
+  },
+  "decay_days": 30
 }

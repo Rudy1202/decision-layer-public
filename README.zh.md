@@ -2,13 +2,13 @@
 
 一个**本地、可学习的决策层**技能，适用于各类 AI 编码智能体（WorkBuddy / opencode / 任何能跑 Python 脚本的智能体）。它让智能体对**可复用的偏好型决策**做出判断，既不每次都打扰你，也不需要笨重的智能体框架。
 
-零外部 API。零 pip 依赖。纯标准库。你的 persona 与学到的偏好都存在本地 JSON 文件里，由脚本读取，**绝不注入 LLM 上下文**（省 token、保隐私）。
+零外部 API。零 pip 依赖。纯标准库。你的 persona、学到的偏好、以及改正风格都存在本地 JSON 文件里，由脚本读取，**绝不注入 LLM 上下文**（省 token、保隐私）。
 
 ---
 
 ## 为什么需要它
 
-智能体总会反复遇到同样的小决策：这个任务交给哪个 persona？输出用什么语气？文件怎么归类？选哪个工具？目前只有两种糟糕的默认：
+智能体总会反复遇到同样的小决策：这个任务交给哪个 persona？输出用什么语气？文件怎么归类？选哪个工具？代码审查要多严格？或者——找到 bug 后，**修复方案该长什么样**？目前只有两种糟糕的默认：
 
 - **永远问** → 智能体变成"碎碎念"，你最后懒得看它的提示。
 - **永远猜** → 它慢慢偏离你的口味，而你既看不见也无法纠正。
@@ -18,11 +18,14 @@
 ## 特性
 
 - **置信度门控** — 每个决策类有独立置信度（起始 `0.3`，每次确认 `+0.2`，上限 `0.95`）。低于 `0.7` → 必须确认；达到 → 自行执行并汇报。
-- **在线学习** — 每次确认/推翻都会更新置信度，并**记录你真实的选择**，下次 `decide.py` 会回显 `learned_choice`（"上次你选了 `straight`"）。
+- **auto_scopes（装上即快）** — 在 `policy.json` 里预授权**安全**类，它们首次调用就直接 `AUTO`，新手立刻快起来，不再"每次都问"。
+- **在线学习** — 每次确认/推翻都会更新置信度，并**记录你真实的选择（+可选理由）**，下次 `decide.py` 会回显 `learned_choice`（"上次你选了 `straight`"）。
 - **Gap Protocol（未知决策类）** — 从未出现过的类首次会被强制确认，并把这次选择写进审计日志 `gap_log`，之后走正常曲线。
-- **硬规则** — `always_confirm` 列表与危险范围（`external_send`、`delete`、`paid`、`publish`、`risk=high`）无视置信度、强制确认。
-- **无人值守模式** — 给定时任务用：选出最优项、永不阻塞，并把审计日志写出来，事后一条命令复核。
-- **复核助手** — `review.py` 只列出仍需你复核的类，一键 `confirm` / `override`。
+- **硬规则** — `always_confirm` 列表与危险范围（`external_send`、`delete`、`paid`、`publish`、`risk=high`）无视置信度、强制确认；`auto_scopes` 无法绕过它。
+- **新鲜度衰减** — 超过 `decay_days`（默认 30 天）没碰的类，置信度会衰减，避免偏好过时却仍"自主"。
+- **无人值守模式** — 给定时任务用：选出最优项、永不阻塞，并把审计日志写成 JSONL，事后一条命令复核。
+- **复核助手** — `review.py` 只列出仍需你复核的类（`--json`、`--since`），一键 `confirm` / `override`。
+- **按 persona 驱动改正** — `correct.py` 把一段错误描述，按你的 `remediation_style` 生成"改正计划骨架"（先备份、先计划、走直路、分阶段）。
 
 ## 工作原理
 
@@ -34,14 +37,15 @@
                    ▼
           ┌────────────────┐
           │  要确认吗？     │  conf<thr 或 危险 或 always_confirm 或 is_gap
+          │  (auto_scope → AUTO, 危险 → CONFIRM)
           └───┬───────┬────┘
         是 │       │ 否
               ▼       ▼
          问你      执行 + 📌 汇报
               │
-        你选择 → learn.py  （置信度 += STEP，记录选择）
+        你选择 → learn.py  （置信度 += STEP，记录选择 + 理由）
               │
-              ▼  （重复直到 conf ≥ 0.7）
+              ▼  （重复直到 conf ≥ 0.7，或经 auto_scopes 预授权）
           下次转 AUTO
 ```
 
@@ -52,6 +56,7 @@
 | 首次出现（gap） | `0.3` |
 | 确认 | `min(conf + 0.2, 0.95)` |
 | 推翻 | `conf * 0.5` |
+| 超过 decay_days 未碰 | `max(0.3, conf * 0.7)` |
 
 ## 安装
 
@@ -67,9 +72,19 @@
 ~/.config/opencode/skills/decision-layer/   ← 把本文件夹复制到这里
 ```
 
-需要 Python 3.8+，无需 `pip install`。
+**任何智能体 / 纯 Python**
+```
+git clone https://github.com/<你>/decision-layer.git
+cd decision-layer
+# 就这样——无需构建，无需 pip
+```
 
-> 首次运行会基于中性默认值自动生成 `policy.json`。编辑 `policy.json → user.persona` / `user.background` 来描述你的工作习惯。
+### 运行环境与依赖
+
+- **Python 3.8+**（只用标准库：`argparse`、`json`、`os`、`sys`、`datetime`、`subprocess`）。
+- **无任何第三方包。** 没有 `pip install` 步骤。`requirements.txt` 说明了这一点，里面刻意不列任何需安装的包。
+
+> 首次运行会基于中性默认值自动生成 `policy.json`。编辑 `policy.json → user.persona` / `user.background` / `remediation_style` 来描述你的工作习惯，并把安全类加进 `auto_scopes` 以立即获得自主权。
 
 ## 快速开始
 
@@ -79,12 +94,20 @@ python decide.py --class news_angle --scope content_style --risk low \
   --candidates '[{"id":"straight","label":"直述","score":0.8},{"id":"context","label":"带背景","score":0.5}]'
 
 # 2. 它返回 CONFIRM（第一次）。你选 "straight"：
-python learn.py --class news_angle --outcome confirm --chosen straight
+python learn.py --class news_angle --outcome confirm --chosen straight --rationale "保持简洁"
 
 # 3. 再跑一次——在 conf 到 0.7 之前仍是 CONFIRM，之后转 AUTO。
 python decide.py --class news_angle --scope content_style --risk low \
   --candidates '[{"id":"straight","label":"直述","score":0.8}]'
 ```
+
+### 预授权安全类（立即变快）
+
+编辑 `policy.json`：
+```json
+"auto_scopes": ["news_angle", "bible_tone", "yt_selection"]
+```
+这些低风险类首次调用就返回 `AUTO`——无需"热身"追问。
 
 ### 无人值守 / 定时任务
 
@@ -99,6 +122,27 @@ python review.py --log /path/to/decision_log.txt
 python review.py --apply --class yt_selection --outcome confirm --chosen recent_top
 ```
 
+### 按 persona 驱动改正
+
+```bash
+python correct.py --error "ImportError: cannot import name 'X' from 'Y'" --class fix_import
+# 打印一份按你 remediation_style 生成的改正计划骨架（备份 -> 计划 -> 分阶段 -> 验证）
+```
+
+## 用于代码建立 / 审查
+
+技能本身通用；"代码"只是更多决策类。建议在 `policy.json` 里登记这些类（首次使用会自动出现）：
+
+| 决策类 | 候选例子 |
+|---|---|
+| `code_review_strictness` | `security_only` vs `full_style` |
+| `refactor_aggressiveness` | `minimal` vs `restructure` |
+| `test_strategy` | `happy_path` vs `edge_cases` vs `mutation` |
+| `error_handling_policy` | `fail_fast` vs `graceful_degrade` |
+| `fix_vs_report` | `apply_fix` vs `report_only` |
+
+把它接进智能体的 plan/build/review 步骤：动手前先用候选方案调 `decide.py`；返回 `AUTO` 就执行，返回 `CONFIRM` 就展示推荐。找到错误后调 `correct.py`，让修复方案贴合用户口味。
+
 ## 配置（`policy.json`）
 
 | 字段 | 含义 |
@@ -108,15 +152,18 @@ python review.py --apply --class yt_selection --outcome confirm --chosen recent_
 | `authorized_scopes` | 智能体可处理的范围（仅供参考） |
 | `risky_scopes` | 始终强制确认的范围（`external_send`、`delete`、`paid`、`publish`） |
 | `always_confirm` | 永远钉在确认的类（最高优先级） |
-| `confidence` | 各决策类学到的置信度（由 `learn.py` 管理） |
-| `preferences` | 各决策类上次选择的 id（由 `learn.py` 管理） |
+| `auto_scopes` | 预授权的安全类 → 装上即 AUTO（永不阻塞） |
+| `confidence` / `last_seen` | 各决策类学到的置信度 + 新鲜度（由 `learn.py` 管理） |
+| `preferences` | 各决策类上次选择 id + 理由（由 `learn.py` 管理） |
 | `gap_log` | 未知类首次解决的审计记录 |
+| `remediation_style` | `correct.py` 使用的 persona 特质（phases、prefer_direct、plan_before_action、backup_before_change） |
+| `decay_days` | 多少天未碰后置信度衰减（0 = 关闭） |
 
 ## 隐私与安全
 
 - **无网络。** 全部本地文件，无遥测、无 API key。
 - **决策过程不进 LLM。** 裁决是纯文件 + 数学，推理便宜且可复现。
-- **危险动作无法自主。** 发送 / 删除 / 付费 / 发布 永远需要你。
+- **危险动作无法自主。** 发送 / 删除 / 付费 / 发布 永远需要你，`auto_scopes` 也不能绕过。
 - **你始终掌控。** 置信度是" earned trust"的代理指标而非概率；安全闸门无视它。
 
 ## 相关项目
@@ -128,7 +175,7 @@ python review.py --apply --class yt_selection --outcome confirm --chosen recent_
 - **GitHub Issues Agent 的置信度门控** — 阈值→自主 / 理由审计的模式。
 - **Jev decision layer** — 另一种 token-ROI / 多 key 路线，我们**刻意没有**采用，以保持零依赖。
 
-本项目的独有之处：把**按类置信度学习 + 无人值守复核闭环 + 硬安全闸门**组合成一个零运行时依赖、可即插即用的技能。
+本项目的独有之处：把**按类置信度学习 + auto_scopes 快速起步 + 无人值守 JSONL 复核闭环 + 按 persona 驱动改正**组合成一个零运行时依赖、可即插即用的技能。
 
 ## 许可证
 

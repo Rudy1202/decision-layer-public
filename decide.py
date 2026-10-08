@@ -3,19 +3,25 @@
 """Decision arbitration for the local decision-layer.
 
 Reads policy.json and prints a verdict:
-  {mode, confidence, threshold, risky, is_gap, learned_choice, recommended, note}
+  {mode, confidence, threshold, risky, is_gap, auto_scope, learned_choice,
+   rationale, recommended, note}
 
 Enhancements (borrowed from public projects, kept zero-API / file-only):
 - Gap Protocol: an unknown class (is_gap) is flagged so the first run must
   confirm AND record the user's preference.
-- learned_choice: returns the user's historically chosen id for this class.
+- learned_choice / rationale: returns the user's historically chosen id (+ why).
 - always_confirm: hard-rule short-circuit (rule-engine-first idea).
+- auto_scopes: pre-authorized SAFE classes go AUTO from install (fast out of the box).
+- last_seen + confidence decay: freshness tracking so stale classes drop back to review.
 """
 import argparse
 import json
 import sys
 
-from common import INIT_CONF, load_policy, THRESHOLD_DEFAULT
+from common import (
+    INIT_CONF, load_policy, save_policy, THRESHOLD_DEFAULT,
+    apply_decay, touch, learned_choice_of,
+)
 
 
 def main():
@@ -27,16 +33,20 @@ def main():
     args = ap.parse_args()
 
     p = load_policy()
+    apply_decay(p)
     thr = p.get("threshold", THRESHOLD_DEFAULT)
     conf_map = p.get("confidence", {})
     conf = conf_map.get(args.cls, INIT_CONF)
-    is_gap = args.cls not in conf_map  # never decided before -> gap
+    is_gap = args.cls not in conf_map
 
     risky = (
         (args.scope in p.get("risky_scopes", []))
         or (args.risk == "high")
         or (args.cls in p.get("always_confirm", []))
     )
+    # auto_scopes: pre-authorized SAFE classes -> AUTO immediately (never blocks),
+    # but risky always wins (safety gate can never be bypassed).
+    auto_scope = (args.cls in p.get("auto_scopes", [])) and not risky
 
     try:
         cands = json.loads(args.candidates)
@@ -44,12 +54,18 @@ def main():
         cands = []
     rec = max(cands, key=lambda c: float(c.get("score", 0))) if cands else None
 
-    mode = "CONFIRM" if (risky or conf < thr) else "AUTO"
-    learned = p.get("preferences", {}).get(args.cls)
+    if auto_scope:
+        mode = "AUTO"
+    else:
+        mode = "CONFIRM" if (risky or conf < thr) else "AUTO"
+
+    learned, rationale = learned_choice_of(p, args.cls)
 
     note = "Autonomous decision; will inform the user."
     if risky:
         note = "High-risk / hard-rule: forced CONFIRM."
+    elif auto_scope:
+        note = "Pre-authorized safe scope: AUTO from install."
     elif mode == "CONFIRM":
         note = "Unknown class: needs user confirmation and a stated preference." if is_gap else "Needs user confirmation."
 
@@ -59,10 +75,15 @@ def main():
         "threshold": thr,
         "risky": risky,
         "is_gap": is_gap,
+        "auto_scope": auto_scope,
         "learned_choice": learned,
+        "rationale": rationale,
         "recommended": rec,
         "note": note,
     }
+
+    touch(args.cls, p)
+    save_policy(p)
     print(json.dumps(out, ensure_ascii=False, indent=2))
 
 

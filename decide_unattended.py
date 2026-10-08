@@ -3,12 +3,13 @@
 """Decision-layer — UNATTENDED mode.
 
 Picks the recommended option (argmax of score) and ALWAYS returns it (never
-blocks, because nobody is there to confirm). Writes an audit line to the
-decision log. Designed for scheduled jobs: even if conf < 0.7 it proceeds,
-merely flagging the choice as pending_review.
+blocks, because nobody is there to confirm). Appends one JSON line to the
+decision log (JSONL) so any host — agent, cron, or review tool — can parse it
+programmatically. Designed for scheduled jobs.
 
-Enhancements: is_gap / learned_choice / always_confirm short-circuit; log gains
-a gap field. The default log lives next to this script; override with --log.
+Enhancements: is_gap / learned_choice / always_confirm / auto_scope; the log is
+now JSONL (one JSON object per line). The default log lives next to this script;
+override with --log.
 """
 import argparse
 import json
@@ -16,7 +17,8 @@ import sys
 from datetime import datetime
 
 from common import (
-    INIT_CONF, THRESHOLD_DEFAULT, DECISION_LOG, load_policy,
+    INIT_CONF, THRESHOLD_DEFAULT, DECISION_LOG,
+    load_policy, save_policy, apply_decay, touch, learned_choice_of,
 )
 
 
@@ -30,6 +32,7 @@ def main():
     args = ap.parse_args()
 
     p = load_policy()
+    apply_decay(p)
     thr = p.get("threshold", THRESHOLD_DEFAULT)
     conf_map = p.get("confidence", {})
     conf = conf_map.get(args.cls, INIT_CONF)
@@ -39,26 +42,42 @@ def main():
         or (args.risk == "high")
         or (args.cls in p.get("always_confirm", []))
     )
+    auto_scope = (args.cls in p.get("auto_scopes", [])) and not risky
 
     try:
         cands = json.loads(args.candidates)
     except Exception:
         cands = []
     rec = max(cands, key=lambda c: float(c.get("score", 0))) if cands else None
-    learned = p.get("preferences", {}).get(args.cls)
+    learned, rationale = learned_choice_of(p, args.cls)
 
-    mode = "CONFIRM" if (risky or conf < thr) else "AUTO"
+    mode = "AUTO" if (auto_scope or (not risky and conf >= thr)) else "CONFIRM"
 
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     chosen = f"{rec['id']} ({rec['label']})" if rec else "(none)"
     note = "pending_review" if mode == "CONFIRM" else "autonomous"
-    line = (f"{ts} | class={args.cls} | scope={args.scope} | risk={args.risk} | "
-            f"mode={mode} | conf={round(conf,3)} | chosen={chosen} | gap={'Y' if is_gap else 'N'} | {note}\n")
+    entry = {
+        "ts": ts,
+        "class": args.cls,
+        "scope": args.scope,
+        "risk": args.risk,
+        "mode": mode,
+        "conf": round(conf, 3),
+        "chosen": chosen,
+        "chosen_id": rec["id"] if rec else None,
+        "is_gap": is_gap,
+        "auto_scope": auto_scope,
+        "gap": "Y" if is_gap else "N",
+        "note": note,
+    }
     try:
         with open(args.log, "a", encoding="utf-8") as f:
-            f.write(line)
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception as e:
         sys.stderr.write(f"[warn] cannot write log: {e}\n")
+
+    touch(args.cls, p)
+    save_policy(p)
 
     out = {
         "chosen_id": rec["id"] if rec else None,
@@ -66,6 +85,7 @@ def main():
         "mode": mode,
         "confidence": round(conf, 3),
         "is_gap": is_gap,
+        "auto_scope": auto_scope,
         "learned_choice": learned,
     }
     print(json.dumps(out, ensure_ascii=False, indent=2))

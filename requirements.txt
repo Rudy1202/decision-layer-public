@@ -1,0 +1,12 @@
+# decision-layer has NO third-party dependencies.
+#
+# Requirements:
+#   - Python 3.8 or newer
+#   - Standard library only: argparse, json, os, sys, datetime, subprocess
+#
+# No `pip install` is needed. Just run the scripts, e.g.:
+#   python decide.py --class news_angle --candidates '[{"id":"straight","label":"Straight","score":0.8}]'
+#
+# On first run, policy.json is auto-created from a neutral default next to the
+# scripts. Edit it (or policy.example.json) to set your persona / auto_scopes /
+# remediation_style.
